@@ -22,6 +22,7 @@ const reviewRoutes = require('./src/routes/reviewRoutes');
 const currencyRoutes = require('./src/routes/currencyRoutes');
 const bannerRoutes = require('./src/routes/bannerRoutes');
 const blogRoutes = require('./src/routes/blogRoutes');
+const shipmentRoutes = require('./src/routes/shipmentRoutes');
 
 // Initialize the Express application
 const app = express();
@@ -50,6 +51,7 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/currencies', currencyRoutes);
 app.use('/api/banners', bannerRoutes);
 app.use('/api/blogs', blogRoutes);
+app.use('/api/shipments', shipmentRoutes);
 
 // Server health check endpoint to monitor API uptime and availability
 app.get('/api/health', (req, res) => {

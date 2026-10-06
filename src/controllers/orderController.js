@@ -8,6 +8,7 @@ exports.createOrder = async (req, res) => {
         const userId = req.user.id;
         const {
             total_amount,
+            shipping_cost = 0.00, // Default shipping cost set to 0.00 if omitted
             currency_code,
             shipping_address,
             city,
@@ -30,6 +31,7 @@ exports.createOrder = async (req, res) => {
         const orderData = {
             user_id: userId,
             total_amount,
+            shipping_cost, // Added shipping cost field
             currency_code,
             shipping_address,
             city,
@@ -195,6 +197,7 @@ exports.updateOrderStatus = async (req, res) => {
         });
     }
 };
+
 /**
  * Cancel order by Customer (Only if order status is 'pending')
  */

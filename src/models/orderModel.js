@@ -16,6 +16,7 @@ class OrderModel {
             const {
                 user_id,
                 total_amount,
+                shipping_cost, // Destructure shipping_cost from controller payload
                 currency_code,
                 shipping_address,
                 city,
@@ -26,17 +27,18 @@ class OrderModel {
                 notes
             } = orderData;
 
-            // 1. Insert into orders table
+            // 1. Insert order header into orders table including shipping_cost
             const orderQuery = `
                 INSERT INTO orders (
-                    user_id, total_amount, currency_code, shipping_address, 
+                    user_id, total_amount, shipping_cost, currency_code, shipping_address, 
                     city, postal_code, country, phone_number, payment_method, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
 
             const [orderResult] = await connection.execute(orderQuery, [
                 user_id,
                 total_amount,
+                shipping_cost || 0.00, // Pass shipping_cost value (Defaults to 0.00 if undefined)
                 currency_code || 'USD',
                 shipping_address,
                 city,
@@ -68,16 +70,16 @@ class OrderModel {
                 ]);
             }
 
-            // Commit transaction
+            // Commit transaction after successfully creating order and all items
             await connection.commit();
             return orderId;
 
         } catch (error) {
-            // Rollback changes if any query fails
+            // Rollback all database operations if any single step fails
             await connection.rollback();
             throw error;
         } finally {
-            // Release database connection back to the pool
+            // Always release the database connection back to the connection pool
             connection.release();
         }
     }
@@ -130,6 +132,7 @@ class OrderModel {
             SELECT 
                 id AS order_id,
                 total_amount,
+                shipping_cost,
                 currency_code,
                 payment_status,
                 order_status,
@@ -154,6 +157,7 @@ class OrderModel {
                 u.name AS customer_name,
                 u.email AS customer_email,
                 o.total_amount,
+                o.shipping_cost,
                 o.currency_code,
                 o.payment_status,
                 o.order_status,
@@ -194,6 +198,7 @@ class OrderModel {
         const [result] = await db.execute(query, queryParams);
         return result.affectedRows > 0;
     }
+
     /**
      * Cancel an order if it's still in 'pending' status (Customer action)
      * @param {number} orderId - Target Order ID
