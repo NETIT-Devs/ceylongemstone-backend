@@ -3,13 +3,32 @@ const path = require('path');
 const GemstoneModel = require('../models/gemstoneModel');
 
 /**
- * @desc    Create a new gemstone product with optional image
+ * Delete helper function to clean up files from storage
+ */
+const deletePhysicalFile = (relativePath) => {
+    if (relativePath) {
+        // Remove leading slashes
+        const cleanPath = relativePath.replace(/^[\/\\]+/, '');
+        const fullPath = path.join(process.cwd(), cleanPath);
+        
+        if (fs.existsSync(fullPath)) {
+            try {
+                fs.unlinkSync(fullPath);
+            } catch (err) {
+                console.error(`Failed to delete file at ${fullPath}:`, err);
+            }
+        }
+    }
+};
+
+/**
+ * @desc    Create a new gemstone product directly with optional image and stock logic
  * @route   POST /api/gemstones
  * @access  Private (Admin & Superadmin)
  */
-exports.createGemstone = async (req, res) => {
+const createGemstone = async (req, res) => {
     try {
-        const { title, sku, price_usd, carat_weight, color, shape } = req.body;
+        const { title, sku, price_usd, carat_weight, color, shape, stock_quantity, stock_status } = req.body;
 
         // Basic input validation
         if (!title || !sku || !price_usd || !carat_weight || !color || !shape) {
@@ -19,11 +38,16 @@ exports.createGemstone = async (req, res) => {
             });
         }
 
-        // Extract relative file path if file is uploaded via Multer
-        const filePath = req.file ? `/uploads/${req.file.filename}` : null;
+        // Extract image file correctly from upload.fields
+        const imageFile = req.files && req.files['image'] ? req.files['image'][0] : null;
+        const filePath = imageFile ? `/uploads/${imageFile.filename}` : null;
 
         // Pass payload and file path to model
-        const gemstoneId = await GemstoneModel.create(req.body, filePath);
+        const gemstoneId = await GemstoneModel.create({
+            ...req.body,
+            stock_quantity: stock_quantity !== undefined ? parseInt(stock_quantity) : 1,
+            stock_status: stock_status || 'available'
+        }, filePath);
 
         res.status(201).json({
             success: true,
@@ -31,7 +55,6 @@ exports.createGemstone = async (req, res) => {
             gemstoneId
         });
     } catch (error) {
-        // Handle duplicate SKU error
         if (error.code === 'ER_DUP_ENTRY') {
             return res.status(400).json({
                 success: false,
@@ -48,20 +71,23 @@ exports.createGemstone = async (req, res) => {
 };
 
 /**
- * @desc    Fetch all available gemstones with optional search & filters
+ * @desc    Fetch all gemstones with optional search, filters, stock status & low_stock
  * @route   GET /api/gemstones
  * @access  Public
  */
-exports.getAllGemstones = async (req, res) => {
+const getAllGemstones = async (req, res) => {
     try {
-        const { category_id, color, min_price, max_price, search } = req.query;
+        const { category_id, color, min_price, max_price, search, stock_status, low_stock, is_available } = req.query;
 
         const gemstones = await GemstoneModel.getAll({
             category_id,
             color,
             min_price,
             max_price,
-            search
+            search,
+            stock_status,
+            low_stock,
+            is_available
         });
 
         res.status(200).json({
@@ -83,7 +109,7 @@ exports.getAllGemstones = async (req, res) => {
  * @route   GET /api/gemstones/:id
  * @access  Public
  */
-exports.getGemstoneById = async (req, res) => {
+const getGemstoneById = async (req, res) => {
     try {
         const gemstone = await GemstoneModel.getById(req.params.id);
 
@@ -108,13 +134,27 @@ exports.getGemstoneById = async (req, res) => {
 };
 
 /**
- * @desc    Update an existing gemstone
+ * @desc    Update an existing gemstone (including stock quantity and status)
  * @route   PUT /api/gemstones/:id
  * @access  Private (Admin & Superadmin)
  */
-exports.updateGemstone = async (req, res) => {
+const updateGemstone = async (req, res) => {
     try {
-        const isUpdated = await GemstoneModel.update(req.params.id, req.body);
+        const { stock_quantity, stock_status } = req.body;
+        
+        let updateData = { ...req.body };
+
+        // Automatically set availability and fallback status based on stock quantity
+        if (stock_quantity !== undefined && parseInt(stock_quantity) <= 0) {
+            updateData.is_available = 0;
+            if (!stock_status) {
+                updateData.stock_status = 'acquired';
+            }
+        } else if (stock_quantity !== undefined && parseInt(stock_quantity) > 0) {
+            updateData.is_available = 1;
+        }
+
+        const isUpdated = await GemstoneModel.update(req.params.id, updateData);
 
         if (!isUpdated) {
             return res.status(404).json({
@@ -137,15 +177,14 @@ exports.updateGemstone = async (req, res) => {
 };
 
 /**
- * @desc    Delete a gemstone and its associated media & certificate files
+ * @desc    Delete a gemstone and remove its media and certificate files from disk
  * @route   DELETE /api/gemstones/:id
  * @access  Private (Admin & Superadmin)
  */
-exports.deleteGemstone = async (req, res) => {
+const deleteGemstone = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // 1. Fetch gemstone details to get image and certificate paths BEFORE DB deletion
         const gemstone = await GemstoneModel.getById(id);
 
         if (!gemstone) {
@@ -155,29 +194,14 @@ exports.deleteGemstone = async (req, res) => {
             });
         }
 
-        // Store file paths
         const imageFilePath = gemstone.file_path;
         const certFilePath = gemstone.pdf_url;
 
-        // 2. Delete record from database
         const isDeleted = await GemstoneModel.delete(id);
 
-        // 3. Delete physical files from server
         if (isDeleted) {
-            const deleteFile = (relativePath) => {
-                if (relativePath) {
-                    const cleanPath = relativePath.replace(/^[\/\\]+/, '');
-                    const fullPath = path.resolve(process.cwd(), cleanPath);
-                    if (fs.existsSync(fullPath)) {
-                        fs.unlinkSync(fullPath);
-                        console.log('File deleted:', fullPath);
-                    }
-                }
-            };
-
-            // Clean product image and certificate file
-            deleteFile(imageFilePath);
-            deleteFile(certFilePath);
+            deletePhysicalFile(imageFilePath);
+            deletePhysicalFile(certFilePath);
         }
 
         res.status(200).json({
@@ -198,16 +222,15 @@ exports.deleteGemstone = async (req, res) => {
 // ==========================================
 
 /**
- * @desc    Attach a certificate to a gemstone
+ * @desc    Attach a certificate PDF to a specific gemstone
  * @route   POST /api/gemstones/:id/certificate
  * @access  Private (Admin & Superadmin)
  */
-exports.addGemstoneCertificate = async (req, res) => {
+const addGemstoneCertificate = async (req, res) => {
     try {
         const { id } = req.params;
         const { certificate_number, lab_name } = req.body;
 
-        // 1. Check if gemstone exists
         const gemstone = await GemstoneModel.getById(id);
         if (!gemstone) {
             return res.status(404).json({
@@ -216,7 +239,6 @@ exports.addGemstoneCertificate = async (req, res) => {
             });
         }
 
-        // 2. Input validation
         if (!certificate_number || !lab_name) {
             return res.status(400).json({
                 success: false,
@@ -224,10 +246,7 @@ exports.addGemstoneCertificate = async (req, res) => {
             });
         }
 
-        // 3. File path handling via Multer (Saves in /uploads/ directory)
         const pdfUrl = req.file ? `/uploads/${req.file.filename}` : null;
-
-        // 4. Insert into 'certificates' database table
         const certId = await GemstoneModel.addCertificate(id, req.body, pdfUrl);
 
         res.status(201).json({
@@ -252,15 +271,14 @@ exports.addGemstoneCertificate = async (req, res) => {
 };
 
 /**
- * @desc    Update a gemstone's certificate
+ * @desc    Update certificate information and optionally replace the PDF file
  * @route   PUT /api/gemstones/:id/certificate
  * @access  Private (Admin & Superadmin)
  */
-exports.updateGemstoneCertificate = async (req, res) => {
+const updateGemstoneCertificate = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // 1. Check if certificate exists for this gemstone
         const existingCert = await GemstoneModel.getCertificateByGemstoneId(id);
         if (!existingCert) {
             return res.status(404).json({
@@ -271,22 +289,15 @@ exports.updateGemstoneCertificate = async (req, res) => {
 
         let newPdfUrl = null;
 
-        // 2. Handle file replacement
         if (req.file) {
             newPdfUrl = `/uploads/${req.file.filename}`;
 
-            // Unlink old file from server
+            // Clean up old certificate PDF from storage
             if (existingCert.pdf_url) {
-                const cleanPath = existingCert.pdf_url.replace(/^[\/\\]+/, '');
-                const oldFullPath = path.resolve(process.cwd(), cleanPath);
-                if (fs.existsSync(oldFullPath)) {
-                    fs.unlinkSync(oldFullPath);
-                    console.log('Old certificate file unlinked:', oldFullPath);
-                }
+                deletePhysicalFile(existingCert.pdf_url);
             }
         }
 
-        // 3. Update DB record
         const isUpdated = await GemstoneModel.updateCertificate(id, req.body, newPdfUrl);
 
         if (!isUpdated) {
@@ -317,15 +328,14 @@ exports.updateGemstoneCertificate = async (req, res) => {
 };
 
 /**
- * @desc    Delete only the certificate of a gemstone
+ * @desc    Delete a gemstone certificate and unlinks the PDF file from disk
  * @route   DELETE /api/gemstones/:id/certificate
  * @access  Private (Admin & Superadmin)
  */
-exports.deleteGemstoneCertificate = async (req, res) => {
+const deleteGemstoneCertificate = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // 1. Fetch certificate details FIRST to get pdf_url BEFORE DB deletion
         const existingCert = await GemstoneModel.getCertificateByGemstoneId(id);
         if (!existingCert) {
             return res.status(404).json({
@@ -335,21 +345,10 @@ exports.deleteGemstoneCertificate = async (req, res) => {
         }
 
         const certFilePath = existingCert.pdf_url;
-
-        // 2. Delete record from database
         const isDeleted = await GemstoneModel.deleteCertificate(id);
 
-        // 3. Delete physical file from uploads folder
         if (isDeleted && certFilePath) {
-            const cleanPath = certFilePath.replace(/^[\/\\]+/, '');
-            const fullPath = path.resolve(process.cwd(), cleanPath);
-
-            if (fs.existsSync(fullPath)) {
-                fs.unlinkSync(fullPath);
-                console.log('Certificate file unlinked successfully:', fullPath);
-            } else {
-                console.log('Certificate file not found on disk at:', fullPath);
-            }
+            deletePhysicalFile(certFilePath);
         }
 
         res.status(200).json({
@@ -363,4 +362,15 @@ exports.deleteGemstoneCertificate = async (req, res) => {
             error: error.message
         });
     }
+};
+
+module.exports = {
+    createGemstone,
+    getAllGemstones,
+    getGemstoneById,
+    updateGemstone,
+    deleteGemstone,
+    addGemstoneCertificate,
+    updateGemstoneCertificate,
+    deleteGemstoneCertificate
 };
